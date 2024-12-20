@@ -22,9 +22,14 @@ Methods
 3.	Train a ‘Detector’ that can detect and segment cells in images.
 4.	Use the trained Detector to generate behavior examples from the training videos.
 5.	Select some behavior examples and sort them into three categories: inplace, linear, and orient.
+   	![alt text](https://github.com/yujiahu415/CBVCC/blob/main/examples/behavior%20examples.gif?raw=true)
 6.	Use the sorted behavior examples to train a ‘Categorizer’ that can distinguish the three cell behaviors.
 7.	Use the trained Detector and Categorizer to analyze cell behaviors in testing videos.
 8.	For each testing video, the analysis output a video copy in which the behaviors are annotated in frame-wise manner (light yellow represents’ inplace’, dark yellow represents ‘linear’, magenta represents ‘orient’), the frame-wise behavior categories and probability, the frame-wise centers of the tracked cells, and the trajectories of the tracked cells.
+
+	![alt text](https://github.com/yujiahu415/CBVCC/blob/main/examples/annotated%20video_linear_inplace.gif?raw=true)
+  	![alt text](https://github.com/yujiahu415/CBVCC/blob/main/examples/annotated%20video_orient.gif?raw=true)
+  	![alt text](https://github.com/yujiahu415/CBVCC/blob/main/examples/annotated%20video_all%20cell.gif?raw=true)
 	
 
 
