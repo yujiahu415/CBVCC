@@ -1,35 +1,43 @@
 # CBVCC
-Code for Cell Behavior Video Classification Challenge (CBVCC) 2024
+Code for [2024 Cell Behavior Video Classification Challenge (CBVCC)](https://www.immunemap.org/index.php/challenges-menu/cbvcc)
 
-Summary
+## Dataset:
+All annotated training data and the trained models have been shared with the challenge organizers Raffaella Cabini and Diego Pizzagalli.
 
-This pipeline (referred as ‘CB pipeline’ below) was used for the [2024 Cell Behavior Video Classification Challenge (CBVCC)](https://www.immunemap.org/index.php/challenges-menu/cbvcc).
+## Summary:
+The pipeline we developed for the 2024 Cell Behavior Video Classification Challenge (CBVCC), which is referred as ‘CB pipeline’ below, was modified from [LabGym](https://github.com/umyelab/LabGym) ([ref1](https://www.sciencedirect.com/science/article/pii/S2667237523000267), [ref2](https://www.biorxiv.org/content/10.1101/2024.07.07.602350v1)). LabGym was developed for analyzing user-defined behaviors, including cell behaviors.
+The CB pipeline was designed as a generalizable approach for tracking individual cells in videos and classifying the user-defined behaviors of each cell at each frame. Thus, it is not just restricted to the classification task in CBVCC. The goal of CBVCC is to classify videos into two classes: 0 (the cell that passes through the center of the frame has little movement or performs a linear movement during the middle frames of a video) or 1 (the cell that passes through the center of the frame has a sudden direction change in movement during the middle frames of a video). However, there might be multiple cells performing different behaviors simultaneously in one video. A cell might perform different behaviors at different time point (frames) as well. The CB pipeline addresses these issues by tracking all the cells in a video and classifying behaviors for every individual cell at each frame.
+Note that the CB pipeline we developed can calculate the prediction score on each behavior class that users define for each tracked cell in a video in frame-wise manner. But to fit the CBVCC scoring system, which assigns a prediction score between 0 and 1 for each video, we had to arbitrarily obtain a ‘summary prediction score’ for each testing video based on the frame-wise, cell-wise, and behavior-wise prediction scores that the CB pipeline generated.
+To achieve so, we first used a locational filter to filter out cells that do not pass through the center of the frame and only focus on the cell in the center in each video. We then defined three behaviors, ‘inplace’ (the cells have little movement), ‘linear’ (the cells move in a linear fashion), and ‘orient’ (the cells perform sudden directional changes). Next, we generated behavior examples of these three behaviors and trained a behavior classifier on them. Each behavior example lasts for 10 frames (this is also user-definable). We used the predictions on the behaviors at 14th, 15th, and 16th frames, and assigned 0.1429 weight to ‘linear’ behavior, 0.2857 weight to ‘inplace’ behavior, and 0.5714 weight to ‘orient’ behavior, to calculate the final ‘summary prediction score’ that determines whether a video belongs to the ‘0’ or ‘1’ class.
 
-The CB pipeline was modified from [LabGym](https://github.com/umyelab/LabGym) ([ref1](https://www.sciencedirect.com/science/article/pii/S2667237523000267), [ref2](https://www.biorxiv.org/content/10.1101/2024.07.07.602350v1)).
+## Data Preprocessing:
+All videos were preprocessed to 100 X 100 frame size and 6 fps.
 
-LabGym was developed for analyzing user-defined behaviors, including cell behaviors. My goal here is to use this opportunity to develop a general approach that can be used to track individual cells in videos and classify the user-defined behaviors of these cells, not just restricted to the CBVCC.
+## Cell Segmentation:
+Employed LabGym’s Detector module, which was developed based on Detectron2 [3].
+To train a Detector for cell segmentation, 475 frames were extracted from the training videos and cells in them were annotated manually with Roboflow public plan (free version) [4]. These images were augmented in Roboflow using horizontal and vertical flipping, hue between +-15%, 90° rotate (clockwise, counterclockwise, upside down), brightness between +-25%, and exposure between +-10%, to a final dataset that contains 9850 training images. The Detector was trained on inferencing frame size == 100 and iteration number ==10,000.
 
-The goal of the CBVCC is to classify videos into two categories: 0 (the cell that approximately passes through the center of the frame performs a linear movement or no movement) or 1 (the cell that approximately passes through the center of the frame performs a sudden direction change in movement).
+## Cell Tracking:
+After segmentation, each cell is assigned with an identity that is a unique number. Each cell is tracked using an appearance- and distance-based method. Briefly, in two consecutive frames, cells with the same name (similar appearance) are considered as the same objects. If multiple individuals with the same name are present in a frame, the Euclidean distance between every possible pair of two centers in consecutive frames is calculated, and the shortest distance links the two centers that are likely to be the same cell in consecutive frames. Since the cells in this challenge look similar, the appearance-based tracking was not initialized and only the distance-based tracking was employed.
 
-However, there might be multiple cells performing different behaviors in one video. Besides, the cell at different time point (frames) might perform different behaviors. The CB pipeline addresses these issues by tracking all the cells in a video and classifying behaviors for every individual cell at each frame.
+## Classification Model:
+Use the trained Detector to generate behavior examples from the training videos. Each behavior example is a pair of an ‘animation’ and a ‘pattern image’. The animation is a set of frames over a user-defined time window. Each frame is a cropped to containing a single cell. The cell foreground in a frame is masked and the background is set to pixel value == 0. The pattern image is generated by imprinting all cell contours within the duration of its paired animation onto a black background with gradual changing colors to indicate the temporal sequences of the contours.
+The classification model we developed in this challenge contains three submodules: Animation Analyzer, Pattern Recognizer, and Decision Maker, each of which consists of neural networks that suit the design goals.
+The Animation Analyzer is used to analyze animations. It consists of convolutional blocks warped with time distributed layers and followed by recurrent layers (long short-term memory, LSTM), and takes 4-dimentional tensors (timestep, width, height, color channel) as inputs, in which the timestep, width/height and color channel are all user definable. The timestep of the input tensors is the number of frames in an animation. The network architectures in Animation Analyzer are provided with various options, from simple 2-layer VGG-like to complex 50-layer ResNet50, to suit data of different complexity and reduce the risk of over fitting. Convolutional layers are followed by a batch normalization layer and Max pooling layers. The outputs from the last layer are flattened into 1-dimentional (1D) vectors at each time step and then are passed to LSTM.
+The Pattern Recognizer is used to analyze pattern images. It consists of convolutional blocks and takes 3-dimentional tensors (width, height, color channel) as inputs, in which both the width and height are user definable. The color channel is fixed to 3 (Red, Green, and Blue; RGB) since the colors in the pattern images indicate the temporal sequences of animal motions. There are also various options of network architectures in Pattern Recognizer to suit different datasets.
+The Decision Maker consists of a concatenation layer and two fully connected (dense) layers. The concatenation layer merges the outputs from both the Animation Analyzer and the Pattern Recognizer into a single 1D vector and outputs to the first dense layer. The first dense layer then outputs to the second dense layer in which a SoftMax function is used for computing the probabilities of all the behavioral categories. A Batch Normalization layer and a Dropout layer (dropout rate is set to 0.5) are added before the second dense layer. The number of nodes in the second dense layer is set to the number of behavioral categories.
+The setting of neural networks structures used for constructing the final behavior classification model is level 2 (VGG-like) for Animation Analyzer with input shape as 10 X 32 X 32 X 1 and level 4 (VGG-like) for Pattern Recognizer with input shape as 64 X 64 X 3. 
 
-To participate the competition, the CB pipeline uses a filter to filter out cells that do not pass through the center of the frame and only focus on one cell per video, after it tracks all the cells and classifies their behaviors. It uses the predictions on the behavior categories at 14th, 15th, and 16th frames to determine the ‘final’ behavior category the ‘center’ cell performs, although it can categorize the behavior in a frame-wise manner.
+## Training Details:
+The loss function used to train the behavior classification models in this challenge is categorical crossentropy. Stochastic gradient descent (SGD) with an initial learning rate of 0.0001 is used for optimizer in training. The learning rate decreases by a factor of 0.2 if the validation loss stops decreasing (decreasing by < 0.001 is considered as ‘stop decreasing’) for 3 training epochs, and the training stops if the validation loss stops decreasing for 6 training epochs. The model is automatically updated after a training epoch reaches a minimal validation loss. The ratio of training and validation data split is 0.8:0.2.
+To enhance the training efficacy and the generalizability of the trained models, we augmented both the animations and their paired pattern images. The augmentation methods are random rotations, random flipping, random brightness changes, random shearing, random rescaling, and random deletion. After the augmentation, the amount of training data increases by 139 folds.
+The test set from phase 1 of the challenge was not used as either the training or validation dataset in phase 2.
 
-Methods
-
-1.	Process all the training videos to 100 X 100, 6fps.
-2.	Extract frames from training videos, select 475 frames and annotate cells in them with [Roboflow](https://roboflow.com/), and augment the images using: horizontal and vertical flipping, hue between +-15%, 90° rotate (clockwise, counter-clockwise, upside down), brightness between +-25%, and exposure between +-10%.
-3.	Train a ‘Detector’ that can detect and segment cells in images.
-4.	Use the trained Detector to generate behavior examples from the training videos.
-5.	Select some behavior examples and sort them into three categories: inplace, linear, and orient.
-   	![alt text](https://github.com/yujiahu415/CBVCC/blob/main/examples/behavior%20examples.gif?raw=true)
-6.	Use the sorted behavior examples to train a ‘Categorizer’ that can distinguish the three cell behaviors.
-7.	Use the trained Detector and Categorizer to analyze cell behaviors in testing videos.
-8.	For each testing video, the analysis output a video copy in which the behaviors are annotated in frame-wise manner (light yellow represents’ inplace’, dark yellow represents ‘linear’, magenta represents ‘orient’), the frame-wise behavior categories and probability, the frame-wise centers of the tracked cells, and the trajectories of the tracked cells.
-
-	![alt text](https://github.com/yujiahu415/CBVCC/blob/main/examples/annotated%20video_linear_inplace.gif?raw=true)
-  	![alt text](https://github.com/yujiahu415/CBVCC/blob/main/examples/annotated%20video_orient.gif?raw=true)
-  	![alt text](https://github.com/yujiahu415/CBVCC/blob/main/examples/annotated%20video_all%20cell.gif?raw=true)
+## References:
+1. Hu Y, Ferrario CR, Maitland AD, Ionides RB, Ghimire A, Watson B, Iwasaki K, White H, Xi Y, Zhou J, Ye B. LabGym: Quantification of user-defined animal behaviors using learning-based holistic assessment. Cell Reports Methods. 2023 Mar 27;3(3).
+2. Goss K, Bueno-Junior LS, Stangis K, Ardoin T, Carmon H, Zhou J, Satapathy R, Baker I, Jones-Tinsley CE, Lim MM, Watson BO, Sueur C, Ferrario CR, Murphy GG, Ye B, Hu Y. Quantifying social roles in multi-animal videos using subject-aware deep-learning. bioRxiv. 2024 Jul 10.
+3. Wu, Y., Kirillov, A., Massa, F.Lo, W.-Y. & Girshick, R. Detectron2. (2019)
+4. Dwyer B, Nelson J, Solawetz J. Roboflow (version 1.0)[software]. URL: https://roboflow. com. computer vision. 2022.
 	
 
 
